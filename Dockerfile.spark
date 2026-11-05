@@ -1,0 +1,26 @@
+# Spark Structured Streaming job (Kafka -> Spark -> MongoDB)
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 TZ=UTC
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends default-jre-headless procps \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements-spark.txt .
+RUN pip install --no-cache-dir -r requirements-spark.txt
+
+# Download the Spark-Kafka connector jars at build time so the container starts fast and
+# does not depend on Maven being reachable at run time.
+ARG SPARK_KAFKA_PACKAGE=org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3
+ENV SPARK_KAFKA_PACKAGE=${SPARK_KAFKA_PACKAGE}
+RUN python -c "import os; from pyspark.sql import SparkSession; \
+SparkSession.builder.master('local[1]').config('spark.jars.packages', os.environ['SPARK_KAFKA_PACKAGE']).getOrCreate().stop()" \
+    || echo "WARNING: could not pre-fetch connector jars; they will be downloaded at start-up"
+
+COPY spark_job.py .
+
+CMD ["python", "spark_job.py"]
+    

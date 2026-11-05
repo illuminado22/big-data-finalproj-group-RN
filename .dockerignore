@@ -1,0 +1,10 @@
+kafka_2.13-3.7.0
+.env
+.git
+.gitignore
+__pycache__
+*.pyc
+*.md
+docs
+streamlit
+.streamlit
