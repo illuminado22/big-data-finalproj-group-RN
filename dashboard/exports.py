@@ -4,6 +4,7 @@ Formatted exports of the history data: Excel (.xlsx), PDF report and chart image
 All functions take the (filtered) history DataFrame (columns: timestamp [UTC], sensor_id, provider,
 value) and optionally the Spark aggregates DataFrame (window_start, sensor_id, avg_price, ...).
 """
+
 import io
 from datetime import datetime, timezone
 
@@ -37,11 +38,20 @@ def gpu_summary(df):
     rows = []
     for gpu, g in df.sort_values("timestamp").groupby("sensor_id"):
         first, last = float(g["value"].iloc[0]), float(g["value"].iloc[-1])
-        rows.append({
-            "GPU": gpu, "Samples": len(g), "Min": g["value"].min(), "Max": g["value"].max(),
-            "Mean": g["value"].mean(), "Median": g["value"].median(), "Std Dev": g["value"].std(ddof=0),
-            "First": first, "Latest": last, "Change %": (last - first) / first * 100 if first else 0.0,
-        })
+        rows.append(
+            {
+                "GPU": gpu,
+                "Samples": len(g),
+                "Min": g["value"].min(),
+                "Max": g["value"].max(),
+                "Mean": g["value"].mean(),
+                "Median": g["value"].median(),
+                "Std Dev": g["value"].std(ddof=0),
+                "First": first,
+                "Latest": last,
+                "Change %": (last - first) / first * 100 if first else 0.0,
+            }
+        )
     return pd.DataFrame(rows).sort_values("Mean", ascending=False).reset_index(drop=True)
 
 
@@ -50,9 +60,15 @@ def provider_summary(df):
         return pd.DataFrame(columns=["Provider", "Samples", "GPUs", "Mean", "Min", "Max"])
     g = df.groupby("provider")["value"].agg(["count", "mean", "min", "max"])
     g["GPUs"] = df.groupby("provider")["sensor_id"].nunique()
-    g = g.reset_index().rename(columns={"provider": "Provider", "count": "Samples", "mean": "Mean", "min": "Min", "max": "Max"})
+    g = g.reset_index().rename(
+        columns={"provider": "Provider", "count": "Samples", "mean": "Mean", "min": "Min", "max": "Max"}
+    )
     g["Provider"] = g["Provider"].astype(str).str.capitalize()
-    return g[["Provider", "Samples", "GPUs", "Mean", "Min", "Max"]].sort_values("Mean", ascending=False).reset_index(drop=True)
+    return (
+        g[["Provider", "Samples", "GPUs", "Mean", "Min", "Max"]]
+        .sort_values("Mean", ascending=False)
+        .reset_index(drop=True)
+    )
 
 
 def overall_stats(df):
@@ -151,12 +167,19 @@ def build_xlsx(df, agg_df=None, filters_text=""):
     top = 5 + len(overall_stats(df)) + 2
     ws.cell(row=top - 1, column=1, value="Per-GPU aggregation").font = Font(bold=True, size=12)
     money = "$#,##0.0000"
-    end = write_table(ws, summary, top, {c: money for c in ("Min", "Max", "Mean", "Median", "Std Dev", "First", "Latest")} | {"Change %": '0.00"%"'})
+    end = write_table(
+        ws,
+        summary,
+        top,
+        {c: money for c in ("Min", "Max", "Mean", "Median", "Std Dev", "First", "Latest")} | {"Change %": '0.00"%"'},
+    )
     autosize(ws, from_row=5)
     ws.column_dimensions["A"].width = 24
     chart = BarChart()
     chart.type, chart.title, chart.style = "bar", "Average price per GPU (USD/hr)", 10
-    chart.add_data(Reference(ws, min_col=summary.columns.get_loc("Mean") + 1, min_row=top, max_row=end), titles_from_data=True)
+    chart.add_data(
+        Reference(ws, min_col=summary.columns.get_loc("Mean") + 1, min_row=top, max_row=end), titles_from_data=True
+    )
     chart.set_categories(Reference(ws, min_col=1, min_row=top + 1, max_row=end))
     chart.legend, chart.height, chart.width = None, 9, 17
     ws.add_chart(chart, f"M{top - 1}")
@@ -169,11 +192,21 @@ def build_xlsx(df, agg_df=None, filters_text=""):
     # --- Spark aggregates
     if agg_df is not None and not agg_df.empty:
         a = _naive(agg_df, ("window_start", "window_end")).sort_values(["window_start", "sensor_id"])
-        a = a[["window_start", "window_end", "sensor_id", "avg_price", "min_price", "max_price", "std_price", "samples"]]
+        a = a[
+            ["window_start", "window_end", "sensor_id", "avg_price", "min_price", "max_price", "std_price", "samples"]
+        ]
         a.columns = ["Window start (UTC)", "Window end (UTC)", "GPU", "Avg", "Min", "Max", "Std Dev", "Samples"]
         wa = wb.create_sheet("Spark Aggregates")
-        write_table(wa, a, 1, {"Window start (UTC)": "yyyy-mm-dd hh:mm", "Window end (UTC)": "yyyy-mm-dd hh:mm",
-                               **{c: money for c in ("Avg", "Min", "Max", "Std Dev")}})
+        write_table(
+            wa,
+            a,
+            1,
+            {
+                "Window start (UTC)": "yyyy-mm-dd hh:mm",
+                "Window end (UTC)": "yyyy-mm-dd hh:mm",
+                **{c: money for c in ("Avg", "Min", "Max", "Std Dev")},
+            },
+        )
         wa.freeze_panes, wa.auto_filter.ref = "A2", wa.dimensions
         autosize(wa)
 
@@ -181,7 +214,10 @@ def build_xlsx(df, agg_df=None, filters_text=""):
     gpus = list(d.groupby("sensor_id")["value"].mean().sort_values(ascending=False).index[:MAX_SERIES])
     sub = d[d["sensor_id"].isin(gpus)]
     span = (sub["timestamp"].max() - sub["timestamp"].min()).total_seconds()
-    rule = next((r for r, s in (("1min", 60), ("5min", 300), ("15min", 900), ("1h", 3600), ("6h", 21600)) if span / s <= 1500), "1D")
+    rule = next(
+        (r for r, s in (("1min", 60), ("5min", 300), ("15min", 900), ("1h", 3600), ("6h", 21600)) if span / s <= 1500),
+        "1D",
+    )
     pivot = sub.set_index("timestamp").groupby("sensor_id")["value"].resample(rule).mean().unstack(0)
     pivot = pivot.interpolate(limit_area="inside").reset_index().rename(columns={"timestamp": "Time (UTC)"})
     wt = wb.create_sheet("Price Trends")
@@ -198,8 +234,14 @@ def build_xlsx(df, agg_df=None, filters_text=""):
 
     # --- Raw data (everything in the current filter)
     wr = wb.create_sheet("Raw Data")
-    raw = d[["timestamp", "sensor_id", "provider", "value"]] if "provider" in d.columns else d[["timestamp", "sensor_id", "value"]]
-    raw = raw.rename(columns={"timestamp": "Timestamp (UTC)", "sensor_id": "GPU", "provider": "Provider", "value": "Price (USD/hr)"})
+    raw = (
+        d[["timestamp", "sensor_id", "provider", "value"]]
+        if "provider" in d.columns
+        else d[["timestamp", "sensor_id", "value"]]
+    )
+    raw = raw.rename(
+        columns={"timestamp": "Timestamp (UTC)", "sensor_id": "GPU", "provider": "Provider", "value": "Price (USD/hr)"}
+    )
     write_table(wr, raw, 1, {"Timestamp (UTC)": "yyyy-mm-dd hh:mm:ss", "Price (USD/hr)": money})
     wr.freeze_panes, wr.auto_filter.ref = "A2", wr.dimensions
     autosize(wr)
@@ -218,19 +260,37 @@ def build_pdf(df, agg_df=None, filters_text=""):
     from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     ss = getSampleStyleSheet()
-    title = ParagraphStyle("t", parent=ss["Title"], alignment=0, textColor=colors.HexColor("#4C1D95"), fontSize=20, spaceAfter=2)
-    h2 = ParagraphStyle("h2", parent=ss["Heading2"], textColor=colors.HexColor(INK), fontSize=13, spaceBefore=12, spaceAfter=6, keepWithNext=1)
+    title = ParagraphStyle(
+        "t", parent=ss["Title"], alignment=0, textColor=colors.HexColor("#4C1D95"), fontSize=20, spaceAfter=2
+    )
+    h2 = ParagraphStyle(
+        "h2",
+        parent=ss["Heading2"],
+        textColor=colors.HexColor(INK),
+        fontSize=13,
+        spaceBefore=12,
+        spaceAfter=6,
+        keepWithNext=1,
+    )
     small = ParagraphStyle("s", parent=ss["Normal"], fontSize=8.5, textColor=colors.HexColor(MUTED), leading=11)
 
     def table(rows, col_widths=None, align_right_from=1):
         t = Table(rows, colWidths=col_widths, repeatRows=1)
-        t.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4C1D95")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F3F4FA")]),
-            ("LINEBELOW", (0, 0), (-1, -1), 0.25, colors.HexColor("#E0E3EF")),
-            ("ALIGN", (align_right_from, 0), (-1, -1), "RIGHT"), ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ]))
+        t.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4C1D95")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F3F4FA")]),
+                    ("LINEBELOW", (0, 0), (-1, -1), 0.25, colors.HexColor("#E0E3EF")),
+                    ("ALIGN", (align_right_from, 0), (-1, -1), "RIGHT"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ]
+            )
+        )
         return t
 
     def footer(canvas, doc):
@@ -242,28 +302,62 @@ def build_pdf(df, agg_df=None, filters_text=""):
         canvas.restoreState()
 
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.4 * cm, bottomMargin=1.6 * cm,
-                            title="GPU Market Analytics - History Report", author="RN")
-    story = [Paragraph("GPU Market Analytics", title), Paragraph("Cloud GPU price history report (Aquanode marketplace API &rarr; Kafka &rarr; Spark &rarr; MongoDB)", small),
-             Spacer(1, 4), Paragraph(f"Generated: {_now()} &nbsp;|&nbsp; Filters: {filters_text}", small), Spacer(1, 8)]
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(A4),
+        leftMargin=1.5 * cm,
+        rightMargin=1.5 * cm,
+        topMargin=1.4 * cm,
+        bottomMargin=1.6 * cm,
+        title="GPU Market Analytics - History Report",
+        author="RN",
+    )
+    story = [
+        Paragraph("GPU Market Analytics", title),
+        Paragraph(
+            "Cloud GPU price history report (Aquanode marketplace API &rarr; Kafka &rarr; Spark &rarr; MongoDB)", small
+        ),
+        Spacer(1, 4),
+        Paragraph(f"Generated: {_now()} &nbsp;|&nbsp; Filters: {filters_text}", small),
+        Spacer(1, 8),
+    ]
 
     stats = overall_stats(df)
-    kpi_tbl = Table([[f"{k}" for k, _ in stats[:4]], [v for _, v in stats[:4]], [k for k, _ in stats[4:]], [v for _, v in stats[4:]]],
-                    colWidths=[6.6 * cm] * 4)
-    kpi_tbl.setStyle(TableStyle([
-        ("FONTSIZE", (0, 0), (-1, -1), 8), ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor(MUTED)), ("TEXTCOLOR", (0, 2), (-1, 2), colors.HexColor(MUTED)),
-        ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"), ("FONTNAME", (0, 3), (-1, 3), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 1), (-1, 1), 12), ("FONTSIZE", (0, 3), (-1, 3), 12),
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F3F4FA")), ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#E0E3EF")),
-        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-    ]))
+    kpi_tbl = Table(
+        [
+            [f"{k}" for k, _ in stats[:4]],
+            [v for _, v in stats[:4]],
+            [k for k, _ in stats[4:]],
+            [v for _, v in stats[4:]],
+        ],
+        colWidths=[6.6 * cm] * 4,
+    )
+    kpi_tbl.setStyle(
+        TableStyle(
+            [
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor(MUTED)),
+                ("TEXTCOLOR", (0, 2), (-1, 2), colors.HexColor(MUTED)),
+                ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+                ("FONTNAME", (0, 3), (-1, 3), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 1), (-1, 1), 12),
+                ("FONTSIZE", (0, 3), (-1, 3), 12),
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F3F4FA")),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#E0E3EF")),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
     story += [kpi_tbl, Paragraph("Price history", h2)]
     story.append(Image(io.BytesIO(chart_image(df, "png", filters_text)), width=24 * cm, height=24 * cm * 4.8 / 11))
 
     s = gpu_summary(df)
     story += [Paragraph("Aggregation per GPU", h2)]
     rows = [list(s.columns)] + [
-        [r["GPU"], f"{int(r['Samples']):,}"] + [f"${r[c]:.4f}" for c in ("Min", "Max", "Mean", "Median", "Std Dev", "First", "Latest")] + [f"{r['Change %']:+.2f}%"]
+        [r["GPU"], f"{int(r['Samples']):,}"]
+        + [f"${r[c]:.4f}" for c in ("Min", "Max", "Mean", "Median", "Std Dev", "First", "Latest")]
+        + [f"{r['Change %']:+.2f}%"]
         for _, r in s.iterrows()
     ]
     story.append(table(rows, align_right_from=1))
@@ -271,20 +365,57 @@ def build_pdf(df, agg_df=None, filters_text=""):
     p = provider_summary(df)
     if not p.empty:
         story += [Paragraph("Aggregation per provider", h2)]
-        story.append(table([list(p.columns)] + [[r.Provider, f"{r.Samples:,}", r.GPUs, f"${r.Mean:.4f}", f"${r.Min:.4f}", f"${r.Max:.4f}"] for r in p.itertuples(index=False)],
-                           col_widths=[5 * cm, 3 * cm, 3 * cm, 3.5 * cm, 3.5 * cm, 3.5 * cm]))
+        story.append(
+            table(
+                [list(p.columns)]
+                + [
+                    [r.Provider, f"{r.Samples:,}", r.GPUs, f"${r.Mean:.4f}", f"${r.Min:.4f}", f"${r.Max:.4f}"]
+                    for r in p.itertuples(index=False)
+                ],
+                col_widths=[5 * cm, 3 * cm, 3 * cm, 3.5 * cm, 3.5 * cm, 3.5 * cm],
+            )
+        )
 
     if agg_df is not None and not agg_df.empty:
         a = agg_df.sort_values("window_start", ascending=False).head(25)
         story += [Paragraph("Spark windowed aggregates (latest 25 windows; all windows are in the Excel export)", h2)]
-        story.append(table([["Window start (UTC)", "GPU", "Avg", "Min", "Max", "Std Dev", "Samples"]] +
-                           [[r.window_start.strftime("%Y-%m-%d %H:%M"), r.sensor_id, f"${r.avg_price:.4f}", f"${r.min_price:.4f}", f"${r.max_price:.4f}",
-                             f"{r.std_price:.4f}", int(r.samples)] for r in a.itertuples(index=False)], align_right_from=2))
+        story.append(
+            table(
+                [["Window start (UTC)", "GPU", "Avg", "Min", "Max", "Std Dev", "Samples"]]
+                + [
+                    [
+                        r.window_start.strftime("%Y-%m-%d %H:%M"),
+                        r.sensor_id,
+                        f"${r.avg_price:.4f}",
+                        f"${r.min_price:.4f}",
+                        f"${r.max_price:.4f}",
+                        f"{r.std_price:.4f}",
+                        int(r.samples),
+                    ]
+                    for r in a.itertuples(index=False)
+                ],
+                align_right_from=2,
+            )
+        )
 
     latest = df.sort_values("timestamp", ascending=False).head(40)
-    story += [Paragraph(f"Most recent records (40 of {len(df):,}; the complete data set is in the Excel / CSV export)", h2)]
-    story.append(table([["Timestamp (UTC)", "GPU", "Provider", "Price (USD/hr)"]] +
-                       [[r.timestamp.strftime("%Y-%m-%d %H:%M:%S"), r.sensor_id, str(getattr(r, "provider", "")).capitalize(), f"${r.value:.4f}"]
-                        for r in latest.itertuples(index=False)], align_right_from=3))
+    story += [
+        Paragraph(f"Most recent records (40 of {len(df):,}; the complete data set is in the Excel / CSV export)", h2)
+    ]
+    story.append(
+        table(
+            [["Timestamp (UTC)", "GPU", "Provider", "Price (USD/hr)"]]
+            + [
+                [
+                    r.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    r.sensor_id,
+                    str(getattr(r, "provider", "")).capitalize(),
+                    f"${r.value:.4f}",
+                ]
+                for r in latest.itertuples(index=False)
+            ],
+            align_right_from=3,
+        )
+    )
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     return buf.getvalue()

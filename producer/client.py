@@ -1,13 +1,6 @@
-"""
-Kafka Producer - Cloud GPU prices (Aquanode marketplace API)
+"""Aquanode marketplace API -> Kafka."""
 
-Every poll it calls the Aquanode marketplace API once and publishes one message per
-GPU model (the best / cheapest offer) to the Kafka topic. Publishing the same GPUs on
-every poll gives each GPU a proper time series for the dashboard and Spark.
-"""
-import argparse
 import json
-import os
 import sys
 import time
 from collections import Counter
@@ -15,14 +8,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import requests
-from dotenv import load_dotenv
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
 
-load_dotenv()
-
-API_URL = os.getenv("AQUANODE_API_URL", "https://server.aquanode.io/api/v1/marketplace")
-API_KEY = os.getenv("AQUANODE_API_KEY", "")   # the public marketplace endpoint works without it
+from producer.config import API_KEY, API_URL
 
 
 class StreamingDataProducer:
@@ -46,7 +35,7 @@ class StreamingDataProducer:
                 )
                 print(f"Kafka producer connected to {bootstrap_servers}", flush=True)
                 return producer
-            except KafkaError:   # NoBrokersAvailable in kafka-python 2.x, other connection errors in 3.x
+            except KafkaError:  # NoBrokersAvailable in kafka-python 2.x, other connection errors in 3.x
                 print(f"Kafka not ready ({attempt}/{attempts}), retrying in 5s...", flush=True)
                 time.sleep(5)
         print("ERROR: could not reach Kafka", flush=True)
@@ -90,8 +79,10 @@ class StreamingDataProducer:
         return [{"timestamp": now, **best[name]} for name in sorted(tracked)]
 
     def run(self, interval: float, duration: int = None):
-        print(f"Producing to '{self.topic}' every {interval:.0f}s "
-              f"(up to {self.gpu_limit} GPU models per poll)", flush=True)
+        print(
+            f"Producing to '{self.topic}' every {interval:.0f}s " f"(up to {self.gpu_limit} GPU models per poll)",
+            flush=True,
+        )
         start, polls, sent = time.time(), 0, 0
         try:
             while not duration or time.time() - start < duration:
@@ -111,27 +102,3 @@ class StreamingDataProducer:
             self.producer.flush(timeout=10)
             self.producer.close()
             print(f"Producer stopped. Total messages sent: {sent}", flush=True)
-
-
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="Kafka streaming producer (GPU prices)")
-    parser.add_argument("--bootstrap-servers", default=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
-    parser.add_argument("--topic", default=os.getenv("KAFKA_TOPIC", "gpu_stream"))
-    parser.add_argument("--interval", type=float, default=float(os.getenv("PRODUCER_INTERVAL", "15")),
-                        help="seconds between API polls (default 15)")
-    parser.add_argument("--gpu-limit", type=int, default=int(os.getenv("PRODUCER_GPU_LIMIT", "8")),
-                        help="how many GPU models to publish per poll (default 8)")
-    parser.add_argument("--duration", type=int, default=None, help="run time in seconds (default: forever)")
-    return parser.parse_args()
-
-
-def main():
-    print("=" * 60)
-    print("STREAMING DATA PRODUCER - CLOUD GPU PRICES")
-    print("=" * 60, flush=True)
-    args = parse_arguments()
-    StreamingDataProducer(args.bootstrap_servers, args.topic, args.gpu_limit).run(args.interval, args.duration)
-
-
-if __name__ == "__main__":
-    main()

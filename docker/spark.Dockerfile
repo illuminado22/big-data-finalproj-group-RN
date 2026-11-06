@@ -9,8 +9,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements-spark.txt .
-RUN pip install --no-cache-dir -r requirements-spark.txt
+COPY requirements/spark.txt requirements/spark.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install --default-timeout=300 --retries 10 -r requirements/spark.txt
 
 # Download the Spark-Kafka connector jars at build time so the container starts fast and
 # does not depend on Maven being reachable at run time.
@@ -20,7 +20,6 @@ RUN python -c "import os; from pyspark.sql import SparkSession; \
 SparkSession.builder.master('local[1]').config('spark.jars.packages', os.environ['SPARK_KAFKA_PACKAGE']).getOrCreate().stop()" \
     || echo "WARNING: could not pre-fetch connector jars; they will be downloaded at start-up"
 
-COPY spark_job.py .
+COPY streaming ./streaming
 
-CMD ["python", "spark_job.py"]
-    
+CMD ["python", "-m", "streaming"]

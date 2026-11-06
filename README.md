@@ -3,7 +3,7 @@
 Real-time and historical dashboard for cloud GPU prices, built on a **MongoDB – Kafka – Spark** streaming pipeline.
 
 ```
-Aquanode API ─► producer.py ─► Kafka (gpu_stream) ─┬─► Spark Structured Streaming ─► MongoDB ─► Streamlit (History)
+Aquanode API ─► producer ─► Kafka (gpu_stream) ─┬─► Spark Structured Streaming ─► MongoDB ─► Streamlit (History)
                                                    │        ├─ gpu_history     (every record)        │
                                                    │        └─ gpu_aggregates  (1-minute windows)    │
                                                    └──────────────────────────────────────────────► Streamlit (Live, 15 s)
@@ -64,22 +64,34 @@ MongoDB is also published on `localhost:27017` (inspect with MongoDB Compass) an
 Needs a local Kafka and MongoDB (and Java 17 for Spark).
 
 ```bash
-pip install -r requirements.txt -r requirements-spark.txt
-python producer.py                  # terminal 1
-python spark_job.py                 # terminal 2
-streamlit run app.py                # terminal 3  (not "python app.py")
+pip install -r requirements/app.txt -r requirements/spark.txt
+python -m producer                 # terminal 1
+python -m streaming                # terminal 2
+streamlit run app.py               # terminal 3  (not "python app.py")
 ```
 
-## Project files
+## Project structure
 
 ```
-app.py                 Streamlit dashboard
-exports.py             Excel / PDF / JPG export
-producer.py            Aquanode API → Kafka
-spark_job.py           Kafka → Spark → MongoDB
-Dockerfile             image for app + producer
-Dockerfile.spark       image for the Spark job (Java + PySpark)
-docker-compose.yml     the whole stack
-requirements*.txt      Python dependencies
-docs/DISCUSSION.md     draft text: API, pipeline and significance (for the Activity Report)
+app.py                     Streamlit entry point (streamlit run app.py)
+dashboard/                 Web UI
+  config.py                  environment variables and UI constants
+  theme.py                   light / dark palettes and CSS
+  data.py                    Kafka (live) and MongoDB (history) queries
+  slideshow.py               GPU photo slideshow (Wikimedia Commons)
+  components.py              cards, KPIs, tables, panels
+  charts.py                  Plotly figures
+  exports.py                 Excel / PDF / JPG export
+  main.py                    page layout: top bar, slideshow, tab dispatch
+  views/realtime.py          Real-time tab
+  views/historical.py        Historical tab
+producer/                  Aquanode API → Kafka   (python -m producer)
+streaming/                 Spark job: Kafka → MongoDB   (python -m streaming)
+  transform.py               parsing and 1-minute window aggregation
+  mongo_sink.py              idempotent MongoDB upserts, indexes
+  job.py                     wiring of the streaming queries
+docker/                    app.Dockerfile (dashboard + producer), spark.Dockerfile
+requirements/              app.txt, spark.txt
+docker-compose.yml         the whole stack
+docs/DISCUSSION.md         draft text: API, pipeline and significance (for the Activity Report)
 ```
